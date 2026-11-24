@@ -19,3 +19,4 @@ app/frontend/config.js
 # Local junk
 .DS_Store
 *.pkg
+*.pdf
