@@ -1,0 +1,23 @@
+# Copy to terraform.tfvars and fill in the required values.
+
+# Required
+azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+ssh_allowed_cidr      = "203.0.113.10/32" # your IP: curl -s https://checkip.amazonaws.com
+
+# Optional (defaults shown)
+# project_name         = "blogec2"
+# aws_region           = "us-east-1"
+# azure_location       = "eastus"
+# instance_type        = "t3.micro"
+# db_instance_class    = "db.t3.micro"
+# ssh_public_key_path  = "~/.ssh/cloudblog.pub"
+# ssh_private_key_path = "~/.ssh/cloudblog"
+# content_safety_sku   = "F0"
+
+# Notifications: SNS new-post alerts work out of the box. Set a sender to also get SES emails.
+# notification_sender_email    = "you@example.com"
+# notification_test_recipients = ["friend@example.com"] # SES sandbox only delivers to verified addresses
+
+# CI/CD (GitHub Actions)
+# github_repo                 = "KeyurSapara/Blog-Platform-Cloud"
+# create_github_oidc_provider = false # if your account already has the GitHub OIDC provider

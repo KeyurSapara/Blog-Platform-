@@ -1,0 +1,99 @@
+# CI: runs on pull requests and feature branches, and is reused by deploy.yml for main.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests + smoke test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/backend
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: blogdb
+          MYSQL_USER: blogadmin
+          MYSQL_PASSWORD: ci-password
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    env:
+      PORT: 3000
+      DB_HOST: 127.0.0.1
+      DB_NAME: blogdb
+      DB_USER: blogadmin
+      DB_PASSWORD: ci-password
+      COGNITO_USER_POOL_ID: us-east-1_ci0000000
+      COGNITO_CLIENT_ID: ci0000000000000000000000000
+      AZURE_STORAGE_CONNECTION_STRING: UseDevelopmentStorage=true
+      # SNS_TOPIC_ARN / SES_SENDER_EMAIL left empty: notifications are disabled in CI.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/backend/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Syntax check (backend + frontend)
+        run: |
+          for f in $(find src test -name '*.js') ../frontend/app.js; do node --check "$f"; done
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Smoke test against MySQL
+        run: |
+          node src/index.js > api.log 2>&1 &
+          for _ in $(seq 1 30); do curl -fs http://127.0.0.1:3000/api/health && break; sleep 1; done
+          set -x
+          curl -fs http://127.0.0.1:3000/api/health | grep -q '"ok"'
+          curl -fs http://127.0.0.1:3000/api/posts | grep -q '^\[\]$'
+          curl -fs http://127.0.0.1:3000/api/subscriptions/authors/someone | grep -q '"subscribers":0'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/subscriptions)" = 401
+
+      - name: API log
+        if: always()
+        run: cat api.log || true
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  ansible:
+    name: Ansible syntax check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install ansible-core
+      - run: ansible-playbook site.yml --syntax-check -i localhost,
