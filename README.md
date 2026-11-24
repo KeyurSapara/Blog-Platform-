@@ -206,7 +206,7 @@ Open the URL, then **sign up**, enter the code from your email, **log in**, and 
 
 ### Step 6: Turn on the CI/CD pipeline (one time)
 
-Terraform created an **AWS CodePipeline** for `KeyurSapara/Blog-Platform-Cloud` (`github_repo` in `terraform.tfvars`). Its GitHub connection starts as **Pending**, and AWS requires a person to approve it once:
+Terraform created an **AWS CodePipeline** for `KeyurSapara/Blog-Platform-` (`github_repo` in `terraform.tfvars`). Its GitHub connection starts as **Pending**, and AWS requires a person to approve it once:
 
 1. Open `terraform output -raw github_connection_url`.
 2. Select **blogec2-github** → **Update pending connection** → **Install a new app**, and allow the *AWS Connector for GitHub* to access the repository → **Connect**. The status becomes **Available**.

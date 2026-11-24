@@ -74,7 +74,7 @@ variable "notification_test_recipients" {
 variable "github_repo" {
   description = "GitHub repository (owner/name) that CodePipeline builds and deploys"
   type        = string
-  default     = "KeyurSapara/Blog-Platform-Cloud"
+  default     = "KeyurSapara/Blog-Platform-"
 }
 
 variable "github_branch" {
