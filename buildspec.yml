@@ -1,0 +1,40 @@
+# AWS CodeBuild: "Build" stage of the CodePipeline (terraform/cicd.tf).
+# Tests the backend, then outputs two artifacts:
+#   BackendArtifact  -> CodeDeploy bundle (appspec.yml + scripts + app/) for the EC2 server
+#   FrontendArtifact -> static files synced to S3 by the deploy-frontend CodeBuild project
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+  pre_build:
+    commands:
+      - cd app/backend && npm ci --no-audit --no-fund && cd ../..
+  build:
+    commands:
+      - for f in $(find app/backend/src app/backend/test -name '*.js') app/frontend/app.js; do node --check "$f"; done
+      - cd app/backend && npm test && cd ../..
+  post_build:
+    commands:
+      - mkdir -p dist/backend/app
+      - cp -r deploy/codedeploy/. dist/backend/
+      - cp -r app/backend/src app/backend/package.json app/backend/package-lock.json dist/backend/app/
+      - echo "Built commit ${CODEBUILD_RESOLVED_SOURCE_VERSION}" | tee dist/backend/app/RELEASE
+
+artifacts:
+  files:
+    - "**/*"
+  base-directory: dist/backend
+  secondary-artifacts:
+    BackendArtifact:
+      base-directory: dist/backend
+      files:
+        - "**/*"
+    FrontendArtifact:
+      base-directory: app/frontend
+      files:
+        - "**/*"
+      exclude-paths:
+        - config.js
+        - config.example.js

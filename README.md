@@ -5,7 +5,7 @@ A simple, low-cost blog platform deployed across **two clouds**:
 - **AWS** hosts the main application: frontend, API server, login, database, and author-subscription emails (SNS + SES).
 - **Azure** handles blog image storage, AI comment moderation, and disaster-recovery backups.
 
-Infrastructure is created with **Terraform**, the EC2 server is configured with **Ansible**, and every push to `main` is tested and deployed by a **GitHub Actions CI/CD pipeline**.
+Infrastructure is created with **Terraform**, the EC2 server is configured with **Ansible**, and every push to `main` is tested and deployed by an **AWS CodePipeline** (CodeBuild + CodeDeploy).
 
 ---
 
@@ -39,7 +39,9 @@ Infrastructure is created with **Terraform**, the EC2 server is configured with 
                    └──────────────────┘ └─────────────┘ └─────────────────────┘
 
         Monitoring: AWS CloudWatch alarms (EC2 CPU / status) + Azure Monitor (storage metrics)
-        CI/CD:      GitHub Actions ──OIDC──► IAM role ──► S3 artifact + SSM Run Command (EC2) / S3 sync + CloudFront
+        CI/CD:      git push ─► GitHub ─► AWS CodePipeline: CodeBuild (test + package)
+                                                       ├─► CodeDeploy agent on EC2 (backend)
+                                                       └─► CodeBuild: S3 sync + CloudFront invalidation (frontend)
 ```
 
 ### Services Used
@@ -55,8 +57,11 @@ Infrastructure is created with **Terraform**, the EC2 server is configured with 
 | AWS | **CloudWatch** | CPU and status-check alarms |
 | AWS | **SNS** topic | Emails a new post to everyone subscribed to its author (filter policy per reader) |
 | AWS | **SES** | Welcome email to the subscriber and "new subscriber" email to the author |
-| AWS | **IAM** role + **SSM** | EC2 calls SNS/SES without keys; the CD pipeline deploys through SSM Run Command |
-| GitHub | **Actions** + AWS OIDC | CI (tests, smoke test, Terraform/Ansible checks) and CD on every push to `main` |
+| AWS | **IAM** instance role | EC2 calls SNS/SES and downloads releases without access keys |
+| AWS | **CodePipeline** + **CodeConnections** | Starts on every push to `main` of the GitHub repo |
+| AWS | **CodeBuild** | Runs the unit tests and packages the release (`buildspec.yml`); also deploys the frontend to S3 |
+| AWS | **CodeDeploy** | In-place deploy of the API to EC2 with health check and auto-rollback (`deploy/codedeploy/`) |
+| GitHub | **Actions** | Extra CI checks on pull requests (MySQL smoke test, Terraform/Ansible validation) |
 | Azure | **Blob Storage** – `images` | Blog post images (public read) |
 | Azure | **Blob Storage** – `backups` | Nightly gzipped MySQL dumps, Cool tier, auto-deleted after 30 days |
 | Azure | **AI Content Safety** | Rejects hateful, violent, sexual or self-harm comments |
@@ -79,9 +84,10 @@ Infrastructure is created with **Terraform**, the EC2 server is configured with 
 
 ```
 plan-a-ec2/
+├── buildspec.yml              # AWS CodeBuild: test + package backend/frontend artifacts
+├── deploy/codedeploy/         # appspec.yml + hook scripts (install deps, restart, health check)
 ├── .github/workflows/
-│   ├── ci.yml                 # tests + MySQL smoke test, terraform validate, ansible syntax check
-│   └── deploy.yml             # push to main → CI → deploy backend (SSM) + frontend (S3/CloudFront)
+│   └── ci.yml                 # GitHub CI: tests + MySQL smoke test, terraform validate, ansible check
 ├── terraform/                 # Infrastructure as Code (AWS + Azure)
 │   ├── versions.tf            # providers: aws, azurerm, random, local
 │   ├── variables.tf
@@ -94,14 +100,14 @@ plan-a-ec2/
 │   ├── frontend.tf            # S3 bucket, CloudFront, frontend upload + cache invalidation
 │   ├── azure.tf               # resource group, storage account, containers, Content Safety
 │   ├── notifications.tf       # SNS topic, SES identities, EC2 IAM role (SNS/SES/SSM)
-│   ├── cicd.tf                # GitHub OIDC provider, deploy role, artifacts bucket
+│   ├── cicd.tf                # CodePipeline, CodeBuild, CodeDeploy, GitHub connection, artifacts bucket
 │   ├── ansible.tf             # writes Ansible inventory + variables
 │   ├── outputs.tf
 │   └── templates/config.js.tftpl
 ├── ansible/                   # Server configuration
 │   ├── ansible.cfg
-│   ├── site.yml               # Node.js, Nginx, systemd, RDS CA, backup cron, deploy script
-│   └── templates/             # .env, systemd unit, nginx site, blog-deploy.sh
+│   ├── site.yml               # Node.js, Nginx, systemd, RDS CA, backup cron, CodeDeploy agent
+│   └── templates/             # .env, systemd unit, nginx site
 └── app/
     ├── frontend/              # plain HTML/CSS/JS single-page app
     └── backend/               # Node.js + Express REST API
@@ -127,8 +133,18 @@ plan-a-ec2/
 
 Accounts:
 
-- **AWS account** (Free Tier works). Run `aws configure` with an IAM user's access key.
+- **AWS account** (Free Tier works). Run `aws configure` with an IAM user's access key, **or** `aws login`.
 - **Azure subscription** (Azure for Students works). Run `az login`.
+
+> **Using `aws login`?** Terraform's AWS provider can't read its `login_session` credentials yet ("No valid credential sources found"). Add this profile to `~/.aws/config` and run Terraform with `AWS_PROFILE=terraform`:
+>
+> ```ini
+> [profile terraform]
+> credential_process = /opt/homebrew/bin/aws configure export-credentials --profile default --format process
+> region = ap-southeast-2
+> ```
+>
+> **Restricted accounts:** some AWS organizations only allow one region (check with `aws ec2 describe-instances --region us-east-1`). Set `aws_region` to match. Azure for Students only allows a few regions (`az policy assignment list`), so set `azure_location` to one that offers Content Safety, e.g. `koreacentral`.
 
 ---
 
@@ -190,24 +206,22 @@ Open the URL, then **sign up**, enter the code from your email, **log in**, and 
 
 ### Step 6: Turn on the CI/CD pipeline (one time)
 
-The repo is `KeyurSapara/Blog-Platform-Cloud` (change `github_repo` in `terraform.tfvars` if it moves). Terraform created an IAM role that only GitHub Actions on `main` of that repo can assume. Store its details as repository variables:
+Terraform created an **AWS CodePipeline** for `KeyurSapara/Blog-Platform-Cloud` (`github_repo` in `terraform.tfvars`). Its GitHub connection starts as **Pending**, and AWS requires a person to approve it once:
 
-```bash
-cd terraform
-terraform output -raw github_actions_setup | bash    # runs 6× `gh variable set ...`
-```
+1. Open `terraform output -raw github_connection_url`.
+2. Select **blogec2-github** → **Update pending connection** → **Install a new app**, and allow the *AWS Connector for GitHub* to access the repository → **Connect**. The status becomes **Available**.
+3. Start the first run: `aws codepipeline start-pipeline-execution --name blogec2-pipeline`
 
-From now on, every `git push` to `main` runs the pipeline:
+From now on, every `git push` to `main` runs the pipeline (`terraform output -raw codepipeline_url`):
 
-| Stage | What happens |
-|---|---|
-| **CI** (also on pull requests) | `npm ci`, syntax check, unit tests, API smoke test against a MySQL 8.4 container, `terraform fmt -check` + `validate`, `ansible-playbook --syntax-check` |
-| **Deploy backend** | tarball → S3 artifacts bucket → **SSM Run Command** runs `/usr/local/bin/blog-deploy` on EC2 (download, `npm install`, restart, health check) |
-| **Deploy frontend** | `aws s3 sync app/frontend` → CloudFront invalidation |
+| Stage | Service | What happens |
+|---|---|---|
+| **Source** | CodeConnections | Pulls the pushed commit from GitHub |
+| **Build** | CodeBuild (`buildspec.yml`) | `npm ci`, syntax check, unit tests, then packages `BackendArtifact` (CodeDeploy bundle) and `FrontendArtifact` |
+| **Deploy: Backend-EC2** | CodeDeploy (`deploy/codedeploy/appspec.yml`) | The agent on EC2 copies the release to `/opt/blog/backend`, runs `npm install`, restarts `blog-api`, and checks `/api/health`. A failed check rolls back automatically |
+| **Deploy: Frontend-S3** | CodeBuild | `aws s3 sync` to the frontend bucket + CloudFront invalidation |
 
-No AWS keys or SSH keys are stored in GitHub, because the job logs in with **OIDC**. Until the variables exist, the deploy job is skipped and only CI runs. Infrastructure changes (`terraform/*.tf`) are still applied by hand with `terraform apply`.
-
-> A new CloudFront distribution can take a few minutes before it serves traffic everywhere.
+GitHub Actions (`.github/workflows/ci.yml`) also runs a MySQL smoke test and Terraform/Ansible checks on every push and pull request. Infrastructure changes (`terraform/*.tf`) are still applied by hand with `terraform apply`.
 
 ---
 
@@ -223,7 +237,7 @@ No AWS keys or SSH keys are stored in GitHub, because the job logs in with **OID
 | SNS subscription | Log in as user B, open user A's post, click **Subscribe to A**. B gets an "AWS Notification – Subscription Confirmation" email. Click **Confirm subscription**. *Profile → My subscriptions* then shows "Email alerts are active" |
 | SNS new-post alert | Log in as A and publish a post. B receives "New post from A: …" from CloudBlog (no-reply@sns.amazonaws.com) |
 | SES emails | With `notification_sender_email` set and the addresses verified: B gets "You're subscribed to A" and A gets "B subscribed to your CloudBlog posts" |
-| CI/CD | Push a change to `main` and watch the **Actions** tab: CI → Deploy to AWS |
+| CI/CD | Push a change to `main` and watch the pipeline in the CodePipeline console: Source → Build → Deploy |
 
 Run a backup now instead of waiting for 02:00:
 
@@ -238,8 +252,8 @@ ssh -i ~/.ssh/cloudblog ubuntu@$(terraform output -raw ec2_public_ip) \
 
 | Change | Command |
 |---|---|
-| Backend code (`app/backend`) | `git push` to `main` (CI/CD), or `cd ansible && ansible-playbook site.yml` |
-| Frontend (`app/frontend`) | `git push` to `main` (CI/CD), or `cd terraform && terraform apply` |
+| Backend code (`app/backend`) | `git push` to `main` (CodePipeline), or `cd ansible && ansible-playbook site.yml` |
+| Frontend (`app/frontend`) | `git push` to `main` (CodePipeline), or `cd terraform && terraform apply` |
 | Settings in `.env` (new Terraform outputs) | `cd ansible && ansible-playbook site.yml` |
 | Infrastructure (`terraform/*.tf`) | `cd terraform && terraform apply` |
 
@@ -282,7 +296,7 @@ cat /opt/blog/logs/backup.log           # backup logs
 - **Multi-cloud:** AWS for compute, database and identity; Azure for storage, AI and DR. No single-vendor lock-in.
 - **Service models:** IaaS (EC2, VPC), PaaS (RDS, Blob Storage, Cognito), AI as a service (Content Safety), messaging as a service (SNS, SES).
 - **Pub/sub messaging:** an SNS topic with message-attribute filter policies fans each post out to only that author's subscribers.
-- **CI/CD and DevOps:** GitHub Actions tests every change and deploys `main` through OIDC federation and SSM, with no long-lived keys and no open SSH port for the pipeline.
+- **CI/CD and DevOps:** AWS CodePipeline → CodeBuild → CodeDeploy tests and releases every push to `main`, with health checks and automatic rollback.
 - **Infrastructure as Code:** Terraform creates about 30 resources across two clouds, and Ansible handles configuration management.
 - **Security:**
   - private subnet for RDS
@@ -315,7 +329,7 @@ cat /opt/blog/logs/backup.log           # backup logs
 | Azure Blob Storage | A few cents |
 | Azure Content Safety F0 | Free (5,000 text records/month) |
 | SNS email, SES | Free tier: 1,000 SNS emails/month. SES costs $0.10 per 1,000 emails |
-| GitHub Actions | Free for public repositories |
+| CodePipeline V2, CodeBuild, CodeDeploy | About $0.002 per pipeline minute and 100 free CodeBuild minutes/month. CodeDeploy to EC2 is free |
 
 ---
 
@@ -340,5 +354,6 @@ terraform destroy
 | Old frontend still showing | Hard refresh. Terraform already invalidates the CloudFront cache when files change |
 | Subscribed but no new-post emails | Click **Confirm subscription** in the AWS Notification email (check spam). *Profile → My subscriptions* shows the status |
 | No SES welcome / new-subscriber email | SES sandbox: verify both the sender and the recipient (see Step 2), or request production access. Errors are logged in `journalctl -u blog-api` |
-| `terraform apply`: OIDC provider already exists | Set `create_github_oidc_provider = false` |
-| Deploy job: `InvalidInstanceId` | The SSM agent hasn't registered yet. Run `ansible-playbook site.yml` once (it restarts the agent) and re-run the workflow |
+| `No valid credential sources found` (Terraform) | You logged in with `aws login`. Use the `terraform` profile described in Prerequisites |
+| Pipeline **Source** fails: connection not available | Finish Step 6 (authorize the GitHub connection), then **Release change** |
+| CodeDeploy: *no instances found* / agent errors | Run `ansible-playbook site.yml` (installs the agent), then `sudo systemctl status codedeploy-agent` and `/var/log/aws/codedeploy-agent/codedeploy-agent.log` on EC2 |

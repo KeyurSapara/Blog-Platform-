@@ -1,11 +1,10 @@
-# CI: runs on pull requests and feature branches, and is reused by deploy.yml for main.
+# CI checks on GitHub (pull requests and pushes). Deployment is done by AWS CodePipeline
+# (terraform/cicd.tf, buildspec.yml, deploy/codedeploy/), which runs on every push to main.
 name: CI
 
 on:
   pull_request:
   push:
-    branches-ignore: [main]
-  workflow_call:
 
 permissions:
   contents: read

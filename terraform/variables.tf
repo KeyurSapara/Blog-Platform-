@@ -70,17 +70,17 @@ variable "notification_test_recipients" {
   default     = []
 }
 
-# ---------- CI/CD (GitHub Actions) ----------
+# ---------- CI/CD (AWS CodePipeline) ----------
 variable "github_repo" {
-  description = "GitHub repository (owner/name) whose main branch may deploy to this stack"
+  description = "GitHub repository (owner/name) that CodePipeline builds and deploys"
   type        = string
   default     = "KeyurSapara/Blog-Platform-Cloud"
 }
 
-variable "create_github_oidc_provider" {
-  description = "Set to false if your AWS account already has the token.actions.githubusercontent.com OIDC provider"
-  type        = bool
-  default     = true
+variable "github_branch" {
+  description = "Pushes to this branch trigger the pipeline"
+  type        = string
+  default     = "main"
 }
 
 # ---------- Azure ----------

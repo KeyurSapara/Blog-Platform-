@@ -47,15 +47,12 @@ output "sns_topic_arn" {
   value = aws_sns_topic.author_posts.arn
 }
 
-# Paste into a shell in the repo to configure the GitHub Actions deploy pipeline:
-#   terraform output -raw github_actions_setup | bash
-output "github_actions_setup" {
-  value = join("\n", [for k, v in {
-    AWS_REGION                 = var.aws_region
-    AWS_ROLE_ARN               = aws_iam_role.github_deploy.arn
-    ARTIFACT_BUCKET            = aws_s3_bucket.artifacts.id
-    EC2_INSTANCE_ID            = aws_instance.api.id
-    FRONTEND_BUCKET            = aws_s3_bucket.frontend.id
-    CLOUDFRONT_DISTRIBUTION_ID = aws_cloudfront_distribution.main.id
-  } : "gh variable set ${k} --repo ${var.github_repo} --body '${v}'"])
+output "codepipeline_url" {
+  value = "https://${var.aws_region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${aws_codepipeline.main.name}/view?region=${var.aws_region}"
+}
+
+# One-time step: the GitHub connection starts as PENDING. Open this, click "Update pending connection"
+# and install/authorize the AWS Connector GitHub app for the repository.
+output "github_connection_url" {
+  value = "https://${var.aws_region}.console.aws.amazon.com/codesuite/settings/connections?region=${var.aws_region}"
 }

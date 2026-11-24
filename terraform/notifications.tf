@@ -2,7 +2,8 @@
 #   - SNS topic   : every new post is published here with an author_id attribute. Each reader has one
 #                   email subscription whose filter policy lists the authors they follow.
 #   - SES         : one-off emails (subscription welcome to the reader, "new subscriber" to the author).
-#   - IAM role    : lets the EC2 API call SNS/SES without access keys, and enables SSM for the CD pipeline.
+#   - IAM role    : lets the EC2 API call SNS/SES without access keys, and lets the CodeDeploy agent
+#                   download releases from the pipeline's artifacts bucket.
 
 resource "aws_sns_topic" "author_posts" {
   name         = "${local.name}-author-posts"
@@ -65,7 +66,21 @@ resource "aws_iam_role_policy" "api_notifications" {
   })
 }
 
-# Lets the GitHub Actions pipeline run the deploy script on the instance (no SSH needed).
+# CodeDeploy agent: download the release bundle built by CodePipeline.
+resource "aws_iam_role_policy" "api_codedeploy" {
+  name = "codedeploy-artifacts"
+  role = aws_iam_role.api.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:ListBucket"]
+      Resource = [aws_s3_bucket.artifacts.arn, "${aws_s3_bucket.artifacts.arn}/*"]
+    }]
+  })
+}
+
+# Session Manager shell access from the AWS console (no SSH needed).
 resource "aws_iam_role_policy_attachment" "api_ssm" {
   role       = aws_iam_role.api.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
