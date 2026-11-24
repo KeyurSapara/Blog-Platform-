@@ -358,3 +358,6 @@ terraform destroy
 | `No valid credential sources found` (Terraform) | You logged in with `aws login`. Use the `terraform` profile described in Prerequisites |
 | Pipeline **Source** fails: connection not available | Finish Step 6 (authorize the GitHub connection), then **Release change** |
 | CodeDeploy: *no instances found* / agent errors | Run `ansible-playbook site.yml` (installs the agent), then `sudo systemctl status codedeploy-agent` and `/var/log/aws/codedeploy-agent/codedeploy-agent.log` on EC2 |
+
+
+
