@@ -7,6 +7,7 @@ A simple, low-cost blog platform deployed across **two clouds**:
 
 Infrastructure is created with **Terraform**, the EC2 server is configured with **Ansible**, and every push to `main` is tested and deployed by an **AWS CodePipeline** (CodeBuild + CodeDeploy).
 
+
 ---
 
 ## 1. Architecture
